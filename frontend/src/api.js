@@ -10,5 +10,6 @@ export function pool(token) {
     submit:data => post('/surveys',data), fit:wave_id => post('/factors',{wave_id}),
     approve:(id,note) => post(`/factors/${id}/approve`,{note}),
     publish:data => post('/forms/publish',data),
+    appendTrial:data => post('/forms/trial',data),
   };
 }

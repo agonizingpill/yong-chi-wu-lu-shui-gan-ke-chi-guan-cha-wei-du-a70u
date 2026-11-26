@@ -15,3 +15,5 @@ class FactorReport(Base):
     reviewed_by: Mapped[str | None] = mapped_column(String(32))
     review_note: Mapped[str | None] = mapped_column(String(180))
     findings: Mapped[dict | None] = mapped_column(JSON)
+    # 试题试填结果与正式载荷在同一次落库中存下，签发后只读，作为"签发前结果"的快照。
+    trials: Mapped[list | None] = mapped_column(JSON)

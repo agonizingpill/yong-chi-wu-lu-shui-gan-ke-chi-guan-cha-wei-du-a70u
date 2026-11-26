@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -24,6 +24,8 @@ class ObservationForm(Base):
     state: Mapped[str] = mapped_column(String(16))
     source_report_id: Mapped[int | None] = mapped_column(ForeignKey("factor_reports.id"), unique=True)
     signed_by: Mapped[str] = mapped_column(String(32))
+    # 与签发同事务存下的题目身份与估计依据快照，旧卷始终按收卷时的身份解释。
+    trial_evidence: Mapped[list | None] = mapped_column(JSON)
     sections: Mapped[list["FormItem"]] = relationship(lazy="selectin", order_by="FormItem.position",
                                                        cascade="all, delete-orphan")
 
@@ -40,6 +42,7 @@ class FormItem(Base):
     item_id: Mapped[int] = mapped_column(ForeignKey("items.id"))
     position: Mapped[int] = mapped_column(Integer)
     factor: Mapped[int | None] = mapped_column(Integer)
+    is_trial: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
 
 class EditionRegister(Base):

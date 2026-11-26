@@ -4,16 +4,16 @@ from uuid import uuid4
 from fastapi import HTTPException
 from redis import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .audit import record
 from .cohorts import count_cohorts, load_wave
-from .constants import MIN_COHORT, MIN_TOTAL, ReportState, WaveState
-from .factor_math import UnfitObservation, identify_factors
+from .constants import MIN_COHORT, MIN_TOTAL, ReportState, Role, TrialState, WaveState
+from .factor_math import UnfitObservation, estimate_trial_loading, identify_factors
 from .form_models import FormItem, Item
 from .report_models import FactorReport
 from .settings import QUEUE_KEY, REDIS_URL
-from .survey_models import Survey
+from .survey_models import Answer, Survey
 
 logger = logging.getLogger("pool.reports")
 
@@ -26,9 +26,58 @@ def get_report(db, report_id, *, lock=False):
     return row
 
 
-def display_report(row):
+def _trial_counts(db, wave_id, item_id):
+    """Valid (non-blank) answer sheets for a trial item per cohort and overall."""
+    tally = (select(Survey.cohort_id, func.count(func.distinct(Survey.id)))
+             .join(Answer, Answer.survey_id == Survey.id)
+             .where(Survey.wave_id == wave_id, Answer.item_id == item_id)
+             .group_by(Survey.cohort_id))
+    per_cohort = dict(db.execute(tally).all())
+    total = db.scalar(select(func.count(func.distinct(Survey.id)))
+                      .join(Answer, Answer.survey_id == Survey.id)
+                      .where(Survey.wave_id == wave_id, Answer.item_id == item_id))
+    return per_cohort, total or 0
+
+
+def _build_trials(db, wave, trial_sections, surveys, factor_scores):
+    """Estimate loadings for every试填题 against the fixed formal factor scores."""
+    cohort_rows = count_cohorts(db, wave.id)
+    results = []
+    for section in trial_sections:
+        item = db.get(Item, section.item_id)
+        per_cohort, total = _trial_counts(db, wave.id, item.id)
+        short = [cohort.code for cohort, _ in cohort_rows
+                 if per_cohort.get(cohort.id, 0) < MIN_COHORT]
+        if short or total < MIN_TOTAL:
+            reasons = [f"教练组 {'、'.join(short)} 该题有效作答不足 {MIN_COHORT} 份"] if short else []
+            if total < MIN_TOTAL:
+                reasons.append(f"整批该题有效作答不足 {MIN_TOTAL} 份")
+            results.append({"item_id": item.id, "code": item.code, "state": TrialState.SKIPPED,
+                            "reason": "；".join(reasons), "loadings": None, "primary": None,
+                            "strong": False, "count": total})
+            continue
+        eligible_ids = {survey_id for survey_id, in db.execute(
+            select(Survey.id).join(Answer, Answer.survey_id == Survey.id)
+            .where(Survey.wave_id == wave.id, Answer.item_id == item.id)).all()}
+        estimate = estimate_trial_loading(item, surveys, factor_scores, eligible_ids)
+        if estimate is None:
+            results.append({"item_id": item.id, "code": item.code, "state": TrialState.SKIPPED,
+                            "reason": "该题作答没有组内变化，无法估计载荷。", "loadings": None,
+                            "primary": None, "strong": False, "count": total})
+        else:
+            results.append({"item_id": item.id, "code": item.code, "state": TrialState.ELIGIBLE,
+                            "reason": None, **estimate})
+    return results
+
+
+def display_report(row, *, viewer_role=None):
+    trials = row.trials
+    if trials is not None and viewer_role == Role.VIEWER:
+        # 受门槛控制的回收数字对查阅岗脱敏：只留状态，不给数量。
+        trials = [{**trial, "count": None, "reason": None} for trial in trials]
     return {"id": row.id, "wave_id": row.wave_id, "code": row.code, "state": row.state,
-            "reviewed_by": row.reviewed_by, "review_note": row.review_note, "findings": row.findings}
+            "reviewed_by": row.reviewed_by, "review_note": row.review_note,
+            "findings": row.findings, "trials": trials}
 
 
 def queue_report(db, wave_id, actor):
@@ -60,14 +109,21 @@ def do_pending(db):
     if pending is None:
         return False
     wave = load_wave(db, pending.wave_id, lock=True)
-    items = db.scalars(select(Item).join(FormItem, FormItem.item_id == Item.id)
-                       .where(FormItem.form_id == wave.form_id).order_by(FormItem.position)).all()
+    sections = (db.scalars(select(FormItem).where(FormItem.form_id == wave.form_id)
+                           .order_by(FormItem.position)).all())
+    formal_sections = [section for section in sections if not section.is_trial]
+    trial_sections = [section for section in sections if section.is_trial]
+    formal_items = [db.get(Item, section.item_id) for section in formal_sections]
     surveys = db.scalars(select(Survey).where(Survey.wave_id == wave.id).order_by(Survey.id)).all()
     try:
-        pending.findings = identify_factors(items, surveys)
+        # 正式因子只用正式题拟合；试题不进入这一步。
+        findings, factor_scores = identify_factors(formal_items, surveys)
+        # 试题载荷在同一事务内、基于该批固定因子分数估计，中断恢复仍读同一批答卷。
+        trials = _build_trials(db, wave, trial_sections, surveys, factor_scores)
     except UnfitObservation as error:
         pending.state, pending.review_note, wave.state = ReportState.FAILED, str(error), WaveState.COLLECTING
     else:
+        pending.findings, pending.trials = findings, trials
         pending.state, wave.state = ReportState.READY, WaveState.REVIEW
     record(db, "worker", "factor_" + pending.state, pending.code)
     db.commit()

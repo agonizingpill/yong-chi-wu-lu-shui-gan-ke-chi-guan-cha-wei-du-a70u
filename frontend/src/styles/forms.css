@@ -16,3 +16,13 @@ fieldset { border:1px solid var(--line);padding:0.4rem 0.65rem;margin:0.1rem 0 0
 .check { display:flex;align-items:center;flex-wrap:wrap;gap:0.3rem; }
 .form-error { color:var(--say);font-size:0.86rem; }
 .form-error:empty { display:none; }
+
+.question.trial { border-left:3px solid var(--depth);background:var(--light); }
+.trial-choice.disabled { opacity:0.62; }
+.trial-choice .reason,.trial-table .reason,.hint { display:block;color:var(--muted);font-size:0.78rem;margin-top:0.15rem; }
+.trial-table td.muted { color:var(--muted);text-align:center; }
+.section-label { margin:1.1rem 0 0.4rem;font-size:0.95rem; }
+.edition-sheet li.is-trial { border-left:3px solid var(--depth);padding-left:0.5rem; }
+.new-trials .trial-add { display:grid;grid-template-columns:minmax(7rem,0.4fr) 1fr auto;gap:0.5rem;align-items:end;margin-bottom:0.5rem; }
+.new-trials .trial-add .check { margin-bottom:0.58rem; }
+@media (max-width:640px) { .new-trials .trial-add { grid-template-columns:1fr; } }

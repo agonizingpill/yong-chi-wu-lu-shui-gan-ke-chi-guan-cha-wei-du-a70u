@@ -28,3 +28,9 @@ class ReportState(StrEnum):
 class FormState(StrEnum):
     ACTIVE = "active"
     ARCHIVED = "archived"
+
+
+class TrialState(StrEnum):
+    ELIGIBLE = "eligible"
+    PENDING = "pending"
+    SKIPPED = "skipped"

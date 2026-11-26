@@ -15,7 +15,7 @@ export async function surveyPage(root,ctx) {
     <div class="survey-wrap">
     <aside class="survey-guide">
       <label>观察轮次<select id="select-wave">${waveOptions(open,active?.id)}</select></label>
-      <h2>${esc(form.edition)}</h2><p>1 代表很少出现，5 代表经常出现。按观察原样作答，后台会根据版本处理反向条目。</p>
+      <h2>${esc(form.edition)}</h2><p>1 代表很少出现，5 代表经常出现。正式题必须作答；标注“试填题”的条目可以留空，后台会根据版本处理反向条目。</p>
       <small>观察券只用于同轮去重，请勿录入姓名和联系方式。</small>
     </aside>
     <form id="survey-form" class="pad">

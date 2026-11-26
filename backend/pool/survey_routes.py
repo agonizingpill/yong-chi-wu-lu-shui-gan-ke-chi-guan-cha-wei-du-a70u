@@ -24,7 +24,8 @@ class AnswerSheet(BaseModel):
     cohort_id: int = Field(gt=0)
     ticket: str = Field(pattern=r"^[a-fA-F0-9]{16,32}$")
     consent: StrictBool
-    answers: dict[int, Scores] = Field(min_length=2, max_length=12)
+    # 正式题必答；试题可留空（缺键即视为该题未填）。上限覆盖正式题与逐轮续填的试题。
+    answers: dict[int, Scores] = Field(min_length=2, max_length=64)
 
 
 @router.post("", status_code=201)
@@ -37,9 +38,16 @@ def register(sheet: AnswerSheet, db: Db, actor: Technician):
     cohort = db.get(Cohort, sheet.cohort_id)
     if cohort is None or cohort.wave_id != wave.id:
         raise HTTPException(409, "教练组不属于该轮观察表。")
-    needed = set(db.scalars(select(FormItem.item_id).where(FormItem.form_id == wave.form_id)))
-    if needed != sheet.answers.keys():
-        raise HTTPException(422, "请按本轮版本完成所有量表条目。")
+    sections = db.scalars(select(FormItem).where(FormItem.form_id == wave.form_id)).all()
+    formal_ids = {section.item_id for section in sections if not section.is_trial}
+    trial_ids = {section.item_id for section in sections if section.is_trial}
+    given = set(sheet.answers)
+    unknown = given - formal_ids - trial_ids
+    if unknown:
+        raise HTTPException(422, "答案包含本轮观察表以外的条目。")
+    missing_formal = formal_ids - given
+    if missing_formal:
+        raise HTTPException(422, "正式量表题必须全部作答，试题才可留空。")
     fingerprint = sha256(sheet.ticket.lower().encode()).hexdigest()
     row = Survey(wave_id=wave.id, cohort_id=cohort.id, ticket_hash=fingerprint,
                  marks=[Answer(item_id=i, raw_value=value) for i, value in sorted(sheet.answers.items())])

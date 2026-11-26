@@ -13,7 +13,7 @@ from pool.report_models import FactorReport
 from pool.settings import DEMO_PASSWORD
 from pool.survey_models import Answer, Survey
 
-from .class_fixtures import COHORTS, ITEMS, TEAM, observations
+from .class_fixtures import COHORTS, ITEMS, TEAM, TRIAL_ITEMS, observations
 
 
 def seed():
@@ -29,12 +29,22 @@ def seed():
                 item = Item(code=code, prompt=prompt, domain=domain, reversed=reversed_item, pinned=pinned)
                 db.add(item)
             items.append(item)
+        trial_items = []
+        for code, prompt, domain, reversed_item in TRIAL_ITEMS:
+            item = db.scalar(select(Item).where(Item.code == code))
+            if item is None:
+                item = Item(code=code, prompt=prompt, domain=domain, reversed=reversed_item, pinned=False)
+                db.add(item)
+            trial_items.append(item)
         db.flush()
         form = db.scalar(select(ObservationForm).where(ObservationForm.edition == "LW-01"))
         if form is None:
-            form = ObservationForm(edition="LW-01", title="课池观察表 · 基线 6 项", state=FormState.ACTIVE,
-                                   signed_by="fang", sections=[FormItem(item_id=item.id, position=i)
-                                                              for i, item in enumerate(items, 1)])
+            sections = [FormItem(item_id=item.id, position=i, is_trial=False)
+                        for i, item in enumerate(items, 1)]
+            sections += [FormItem(item_id=item.id, position=len(sections) + j, is_trial=True)
+                         for j, item in enumerate(trial_items, 1)]
+            form = ObservationForm(edition="LW-01", title="课池观察表 · 基线 6 项 + 试填 2 项",
+                                   state=FormState.ACTIVE, signed_by="fang", sections=sections)
             db.add(form)
             db.flush()
         if db.get(EditionRegister, 1) is None:
@@ -54,12 +64,16 @@ def seed():
             cohorts[code] = cohort
         db.flush()
         existing = set(db.scalars(select(Survey.ticket_hash).where(Survey.wave_id == wave.id)))
-        for group, sample, values in observations():
+        all_items = items + trial_items
+        for group, sample, values, tw1, tw2 in observations():
             fingerprint = sha256(f"synthetic/{sample}".encode()).hexdigest()
             if fingerprint not in existing:
+                trial_values = [tw1, tw2]
+                marks = [Answer(item_id=item.id, raw_value=val)
+                         for item, val in zip(all_items, values + trial_values, strict=True)
+                         if val is not None]  # 试题留空即不生成答案行。
                 db.add(Survey(wave_id=wave.id, cohort_id=cohorts[group].id, ticket_hash=fingerprint,
-                              marks=[Answer(item_id=item.id, raw_value=val)
-                                     for item, val in zip(items, values, strict=True)]))
+                              marks=marks))
         db.commit()
         tracked = (Operator, Cohort, Wave, Item, ObservationForm, Survey, Answer, FactorReport)
         return {model.__tablename__: db.scalar(select(func.count()).select_from(model)) for model in tracked}
